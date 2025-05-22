@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Magic Card Reveal</title>
+    <title>Cards</title>
     <style>
         * {
             margin: 0;
@@ -142,6 +142,11 @@
             canvas.width = cardWidth;
             canvas.height = cardHeight;
 
+            // Change border-radius of card
+            card.style.borderRadius = `${0.04 * cardWidth}px`;
+            cardFront.style.borderRadius = `${0.04 * cardWidth}px`;
+            canvas.style.borderRadius = `${0.04 * cardWidth}px`;
+
             // Initialize canvas with metallic gradient
             const gradient = ctx.createLinearGradient(0, 0, 0, cardHeight);
             gradient.addColorStop(0, '#e0e0e0');
@@ -156,7 +161,7 @@
         window.addEventListener('resize', resizeCard);
 
         function getPosition(x, y, s) {
-            const rect = cardContainer.getBoundingClientRect();
+            const rect = card.getBoundingClientRect();
             const cellWidth = rect.width / s;
             const cellHeight = rect.height / s;
             
