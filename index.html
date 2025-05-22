@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Card Reveal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+            background-color: #eeeeee;
+        }
+
+        .container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .card-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .card {
+            position: relative;
+            background-color: #c0c0c0;
+            border-radius: 18px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2),
+                       0 8px 16px rgba(0, 0, 0, 0.2),
+                       0 16px 32px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease;
+            overflow: hidden;
+        }
+
+        .card-front {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 18px;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
+            opacity: 1;
+            z-index: 1;
+            background-color: white;
+        }
+
+        .card-front.revealed {
+            opacity: 1;
+            transform: none;
+        }
+
+        #scratchCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+            border-radius: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card-container">
+            <div class="card">
+                <div class="card-front"></div>
+                <canvas id="scratchCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const gridValues = [
+            ['ace', '2', '3'],
+            ['4', '5', '6'],
+            ['7', '8', '9']
+        ];
+
+        const dbGridValues = [
+            ['10', 'jack'],
+            ['queen', 'king']
+        ];
+
+        const scratchDirections = {
+            up: 'spades',
+            right: 'hearts',
+            down: 'clubs',
+            left: 'diamonds'
+        };
+
+        const cardContainer = document.querySelector('.card-container');
+        const cardFront = document.querySelector('.card-front');
+        const card = document.querySelector('.card');
+        const canvas = document.getElementById('scratchCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        let isRevealed = false;
+        let isScratching = false;
+        let lastX, lastY;
+        let selectedCard = null;
+        let touchStartTime = 0;
+        let touchCount = 0;
+        let touchStartX, touchStartY;
+
+        // Card aspect ratio
+        const CARD_ASPECT_RATIO = 0.69;
+        function resizeCard() {
+            const containerWidth = window.innerWidth;
+            const containerHeight = window.innerHeight;
+            
+            let cardWidth, cardHeight;
+            
+            if (containerWidth / containerHeight > CARD_ASPECT_RATIO) {
+                cardHeight = containerHeight * 0.9;
+                cardWidth = cardHeight * CARD_ASPECT_RATIO;
+            } else {
+                cardWidth = containerWidth * 0.9;
+                cardHeight = cardWidth / CARD_ASPECT_RATIO;
+            }
+            
+            card.style.width = `${cardWidth}px`;
+            card.style.height = `${cardHeight}px`;
+
+            canvas.width = cardWidth;
+            canvas.height = cardHeight;
+
+            // Initialize canvas with metallic gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, cardHeight);
+            gradient.addColorStop(0, '#e0e0e0');
+            gradient.addColorStop(0.5, '#c0c0c0');
+            gradient.addColorStop(1, '#a0a0a0');
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        resizeCard();
+        window.addEventListener('resize', resizeCard);
+
+        function getPosition(x, y, s) {
+            const rect = cardContainer.getBoundingClientRect();
+            const cellWidth = rect.width / s;
+            const cellHeight = rect.height / s;
+            
+            const col = Math.floor((x - rect.left) / cellWidth);
+            const row = Math.floor((y - rect.top) / cellHeight);
+            
+            // Ensure we're within bounds
+            const boundedCol = Math.max(0, Math.min(s-1, col));
+            const boundedRow = Math.max(0, Math.min(s-1, row));
+            
+            return { row: boundedRow, col: boundedCol };
+        }
+
+        function getDirection(startX, startY, endX, endY) {
+            const dx = endX - startX;
+            const dy = endY - startY;
+            const absDx = Math.abs(dx);
+            const absDy = Math.abs(dy);
+            
+            if (absDx > absDy) {
+                return dx > 0 ? 'right' : 'left';
+            } else {
+                return dy > 0 ? 'down' : 'up';
+            }
+        }
+
+        function revealCard(x, y, scratchDirection, isDouble) {
+            if (isRevealed) return;
+            const { row, col } = getPosition(x, y, isDouble ? 2 : 3);
+            const value = isDouble ? dbGridValues[row][col] : gridValues[row][col];
+            const suit = scratchDirections[scratchDirection];
+            cardFront.style.backgroundImage = `url('cards/${value}_of_${suit}.svg')`;
+            cardFront.classList.add('revealed');
+            isRevealed = true;
+        }
+
+        function scratch(x, y) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            const canvasX = (x - rect.left) * scaleX;
+            const canvasY = (y - rect.top) * scaleY;
+
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.lineWidth = canvas.width * 0.1;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            if (lastX !== undefined && lastY !== undefined) {
+                const lastCanvasX = (lastX - rect.left) * scaleX;
+                const lastCanvasY = (lastY - rect.top) * scaleY;
+                
+                ctx.beginPath();
+                ctx.moveTo(lastCanvasX, lastCanvasY);
+                ctx.lineTo(canvasX, canvasY);
+                ctx.stroke();
+            }
+        }
+
+        function handleTouchStart(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            lastX = touch.clientX;
+            lastY = touch.clientY;
+            touchStartX = lastX;
+            touchStartY = lastY;
+            touchStartTime = Date.now();
+            touchCount = e.touches.length;
+            isScratching = true;
+            scratch(lastX, lastY);
+        }
+
+        function handleTouchMove(e) {
+            if (!isScratching) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const currentX = touch.clientX;
+            const currentY = touch.clientY;
+
+            // Check for card selection on significant movement
+            if (!selectedCard) {
+                const dx = currentX - touchStartX;
+                const dy = currentY - touchStartY;
+                if (Math.sqrt(dx * dx + dy * dy) > 20) {
+                    const scratchDirection = getDirection(touchStartX, touchStartY, currentX, currentY);
+                    const isDouble = touchCount >= 2 || e.shiftKey;
+                    revealCard(touchStartX, touchStartY, scratchDirection, isDouble);
+                }
+            }
+
+            // Draw smooth scratch line
+            const dx = currentX - lastX;
+            const dy = currentY - lastY;
+            const steps = Math.max(Math.floor(Math.sqrt(dx * dx + dy * dy) / 2), 1);
+            
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                scratch(lastX + dx * t, lastY + dy * t);
+            }
+
+            lastX = currentX;
+            lastY = currentY;
+        }
+
+        function handleTouchEnd(e) {
+            if (!isScratching) return;
+            
+            const touch = e.changedTouches[0];
+            const endX = touch.clientX;
+            const endY = touch.clientY;
+            
+            // Quick tap/scratch detection
+            if (touchStartX !== undefined && 
+                Date.now() - touchStartTime < 500 && 
+                !selectedCard) {
+                const scratchDirection = getDirection(touchStartX, touchStartY, endX, endY);
+                revealCard(touchStartX, touchStartY, scratchDirection, false);
+            }
+            
+            // Reset state
+            isScratching = false;
+            lastX = lastY = touchStartX = touchStartY = undefined;
+        }
+
+        // Add touch event listeners
+        cardContainer.addEventListener('touchstart', handleTouchStart, { passive: false });
+        cardContainer.addEventListener('touchmove', handleTouchMove, { passive: false });
+        cardContainer.addEventListener('touchend', handleTouchEnd);
+
+        // Prevent default touch behavior
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+    </script>
+</body>
+</html> 
