@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cards</title>
+    <meta name="theme-color" content="#eeeeee">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" type="image/svg+xml" href="./icons/icon.svg">
+    <link rel="apple-touch-icon" href="./icons/icon-192.png">
     <style>
         * {
             margin: 0;
@@ -88,6 +94,30 @@
     </div>
 
     <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                const localHosts = ['localhost', '127.0.0.1', '[::1]'];
+                if (localHosts.includes(location.hostname)) {
+                    try {
+                        const registration = await navigator.serviceWorker.getRegistration('./sw.js');
+                        const workerURL = new URL('./sw.js', location.href).href;
+                        if (registration?.scope === new URL('./', location.href).href &&
+                            [registration.active, registration.waiting, registration.installing]
+                                .some(worker => worker?.scriptURL === workerURL)) {
+                            const controlled = navigator.serviceWorker.controller?.scriptURL === workerURL;
+                            if (await registration.unregister() && controlled) location.reload();
+                        }
+                    } catch (error) {
+                        console.warn('Could not disable offline support locally:', error);
+                    }
+                    return;
+                }
+                navigator.serviceWorker.register('./sw.js').catch(error => {
+                    console.warn('Offline support unavailable:', error);
+                });
+            });
+        }
+
         const gridValues = [
             ['ace', '2', '3'],
             ['4', '5', '6'],
@@ -103,34 +133,6 @@
             down: 'clubs',
             left: 'diamonds'
         };
-        const stack = [
-            '4c', '2h', '7d', '3c', '4h', '6d', 'as', '5h', '9s', '2s', 'qh', '3d', 'qc',
-            '8h', '6s', '5s', '9h', 'kc', '2d', 'jh', '3s', '8s', '6h', 'tc', '5d', 'kd',
-            '2c', '3h', '8d', '5c', 'ks', 'jd', '8c', 'ts', 'kh', 'jc', '7s', 'th', 'ad',
-            '4s', '7h', '4d', 'ac', '9c', 'js', 'qd', '7c', 'qs', 'td', '6c', 'ah', '9d'
-        ];
-        const numDict = {
-            'a': 'ace',
-            '2': '2',
-            '3': '3',
-            '4': '4',
-            '5': '5',
-            '6': '6',
-            '7': '7',
-            '8': '8',
-            '9': '9',
-            't': '10',
-            'j': 'jack',
-            'q': 'queen',
-            'k': 'king'
-        };
-        const suitDict = {
-            's': 'spades',
-            'h': 'hearts',
-            'c': 'clubs',
-            'd': 'diamonds'
-        };
-
         const cardContainer = document.querySelector('.card-container');
         const cardFront = document.querySelector('.card-front');
         const card = document.querySelector('.card');
@@ -140,7 +142,9 @@
         let isRevealed = false;
         let isScratching = false;
         let lastX, lastY;
-        let selectedCard = null;
+        let pinchStartDistance = null;
+        let pinchPending = false;
+        let ignoreUntilLift = false;
         let touchStartTime = 0;
         let touchCount = 0;
         let touchStartX, touchStartY;
@@ -172,8 +176,12 @@
             cardFront.style.borderRadius = `${0.04 * cardWidth}px`;
             canvas.style.borderRadius = `${0.04 * cardWidth}px`;
 
-            // Initialize canvas with metallic gradient
-            const gradient = ctx.createLinearGradient(0, 0, 0, cardHeight);
+            restoreCoating();
+        }
+
+        function restoreCoating() {
+            ctx.globalCompositeOperation = 'source-over';
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
             gradient.addColorStop(0, '#e0e0e0');
             gradient.addColorStop(0.5, '#c0c0c0');
             gradient.addColorStop(1, '#a0a0a0');
@@ -213,29 +221,14 @@
             }
         }
 
-        function parseUrlParams() {
-            const urlParams = new URLSearchParams(window.location.search);
-            let c = urlParams.get('c');
-            if (!c) return;
-            if (!isNaN(c)) {
-                const ord = parseInt(c);
-                if (ord <= 0 || ord > stack.length) return;
-                c = stack[ord-1];
-            }
-            if (c.length == 2) {
-                const value = numDict[c[0].toLowerCase()];
-                const suit = suitDict[c[1].toLowerCase()];
-                if (value && suit) {
-                    cardFront.style.backgroundImage = `url('cards/${value}_of_${suit}.svg')`;
-                    cardFront.classList.add('revealed');
-                    isRevealed = true;
-                }
-            }
+        function resetCard() {
+            isRevealed = false;
+            cardFront.style.backgroundImage = '';
+            cardFront.classList.remove('revealed');
+            restoreCoating();
         }
 
         function revealCard(x, y, scratchDirection, isDouble) {
-            if (isRevealed) return;
-            parseUrlParams();
             if (isRevealed) return;
             const { row, col } = getPosition(x, y, isDouble ? 2 : 3);
             const value = isDouble ? dbGridValues[row][col] : gridValues[row][col];
@@ -269,8 +262,23 @@
             }
         }
 
+        function touchDistance(touches) {
+            return Math.hypot(
+                touches[1].clientX - touches[0].clientX,
+                touches[1].clientY - touches[0].clientY
+            );
+        }
+
         function handleTouchStart(e) {
             e.preventDefault();
+            if (ignoreUntilLift) return;
+            if (e.touches.length > 2) {
+                isScratching = false;
+                ignoreUntilLift = true;
+                return;
+            }
+            pinchStartDistance = e.touches.length === 2 ? touchDistance(e.touches) : null;
+            pinchPending = false;
             const touch = e.touches[0];
             lastX = touch.clientX;
             lastY = touch.clientY;
@@ -279,18 +287,30 @@
             touchStartTime = Date.now();
             touchCount = e.touches.length;
             isScratching = true;
-            scratch(lastX, lastY);
+            if (touchCount === 1) scratch(lastX, lastY);
         }
 
         function handleTouchMove(e) {
-            if (!isScratching) return;
             e.preventDefault();
+            if (!isScratching || ignoreUntilLift) return;
+            if (pinchStartDistance !== null && e.touches.length === 2) {
+                const contraction = pinchStartDistance - touchDistance(e.touches);
+                // Reserve inward motion for a pinch; parallel motion remains a swipe.
+                if (contraction > 8) pinchPending = true;
+                if (contraction >= Math.max(30, pinchStartDistance * 0.2)) {
+                    resetCard();
+                    isScratching = false;
+                    ignoreUntilLift = true;
+                    return;
+                }
+                if (pinchPending) return;
+            }
             const touch = e.touches[0];
             const currentX = touch.clientX;
             const currentY = touch.clientY;
 
             // Check for card selection on significant movement
-            if (!selectedCard) {
+            if (!isRevealed) {
                 const dx = currentX - touchStartX;
                 const dy = currentY - touchStartY;
                 if (Math.sqrt(dx * dx + dy * dy) > 20) {
@@ -315,22 +335,19 @@
         }
 
         function handleTouchEnd(e) {
-            if (!isScratching) return;
-            
-            const touch = e.changedTouches[0];
-            const endX = touch.clientX;
-            const endY = touch.clientY;
-            
-            // Quick tap/scratch detection
-            if (touchStartX !== undefined && 
-                Date.now() - touchStartTime < 500 && 
-                !selectedCard) {
-                const scratchDirection = getDirection(touchStartX, touchStartY, endX, endY);
-                revealCard(touchStartX, touchStartY, scratchDirection, false);
+            // Only a single-finger gesture can finish as a quick tap.
+            if (e.type !== 'touchcancel' && isScratching && !ignoreUntilLift &&
+                !pinchPending && touchCount === 1 && touchStartX !== undefined &&
+                Date.now() - touchStartTime < 500 && !isRevealed) {
+                const touch = e.changedTouches[0];
+                const direction = getDirection(touchStartX, touchStartY, touch.clientX, touch.clientY);
+                revealCard(touchStartX, touchStartY, direction, false);
             }
-            
-            // Reset state
+
             isScratching = false;
+            ignoreUntilLift = e.touches.length > 0;
+            pinchStartDistance = null;
+            pinchPending = false;
             lastX = lastY = touchStartX = touchStartY = undefined;
         }
 
@@ -338,6 +355,7 @@
         cardContainer.addEventListener('touchstart', handleTouchStart, { passive: false });
         cardContainer.addEventListener('touchmove', handleTouchMove, { passive: false });
         cardContainer.addEventListener('touchend', handleTouchEnd);
+        cardContainer.addEventListener('touchcancel', handleTouchEnd);
 
         // Prevent default touch behavior
         document.addEventListener('touchmove', (e) => {
